@@ -8,6 +8,25 @@
 | **Deps** | `std`, `bufbaga` |
 | **Font** | default `/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf` |
 
+This repository is the package. The compiler, `std`, and `bufbaga` stay
+in the baga language monorepo. Check this tree out as
+`app-product/pdfbaga` there (git submodule) so path deps and
+`-I app-product` keep working.
+
+## Checkout
+
+Inside a baga language clone:
+
+```bash
+git submodule update --init --recursive
+# or, first time from a fresh baga tree without the submodule recorded:
+git clone git@github.com:bagalang/pdfbaga.git app-product/pdfbaga
+```
+
+`sandak.toml` keeps path deps (`../../std`, `../bufbaga`).
+`reportbaga` still depends on `../pdfbaga`. `tests/pdf_test.baga`
+stays in baga.
+
 ```baga
 import "pdfbaga/pdf.baga"
 
