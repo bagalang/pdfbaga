@@ -44,3 +44,7 @@ Or pass font path: `pdf_from_table_file(path, title, rows)`.
 - Embeds full TTF as `FontFile2` (CIDFontType2)
 
 Requires a Unicode TTF on the machine (DejaVu / Noto / Liberation).
+
+## License
+
+[MIT](LICENSE) — Copyright (c) 2026 Dim Gigov.
