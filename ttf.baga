@@ -35,14 +35,20 @@ fn ttf_u32(b: bytes, off: i64) -> i64 {
 }
 
 fn ttf_fail(msg: str) -> TtfFont {
+    let start_code: Vec<i64> = vec_new()
+    let end_code: Vec<i64> = vec_new()
+    let id_delta: Vec<i64> = vec_new()
+    let id_range_off: Vec<i64> = vec_new()
+    let glyph_ids: Vec<i64> = vec_new()
+    let range_base: Vec<i64> = vec_new()
     return TtfFont {
         data: bytes_new(0),
-        start_code: vec_new(),
-        end_code: vec_new(),
-        id_delta: vec_new(),
-        id_range_off: vec_new(),
-        glyph_ids: vec_new(),
-        range_base: vec_new(),
+        start_code: start_code,
+        end_code: end_code,
+        id_delta: id_delta,
+        id_range_off: id_range_off,
+        glyph_ids: glyph_ids,
+        range_base: range_base,
         ok: 0,
         err: msg
     }
@@ -113,12 +119,12 @@ fn ttf_open_bytes(data: bytes) -> TtfFont {
     let id_range_offs = id_deltas + seg_count * 2
     let glyph_array = id_range_offs + seg_count * 2
 
-    let start_code = vec_new()
-    let end_code = vec_new()
-    let id_delta = vec_new()
-    let id_range_off = vec_new()
-    let range_base = vec_new()
-    let glyph_ids = vec_new()
+    let start_code: Vec<i64> = vec_new()
+    let end_code: Vec<i64> = vec_new()
+    let id_delta: Vec<i64> = vec_new()
+    let id_range_off: Vec<i64> = vec_new()
+    let range_base: Vec<i64> = vec_new()
+    let glyph_ids: Vec<i64> = vec_new()
 
     let mut s: i64 = 0
     while s < seg_count {

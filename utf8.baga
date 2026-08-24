@@ -1,9 +1,23 @@
 // utf8.baga — UTF-8 codepoint iteration (byte-indexed str).
+// Invalid bytes, bad continuations, overlong encodings, surrogates, and
+// code points above U+10FFFF become U+003F ('?') and skip one byte.
 
 struct Utf8Next {
     cp: i64,     // Unicode code point
     next: i64,   // next byte index
     ok: i64
+}
+
+fn utf8_bad(i: i64) -> Utf8Next {
+    return Utf8Next { cp: 63, next: i + 1, ok: 1 }
+}
+
+fn utf8_cont(s: str, i: i64) -> i64 {
+    let b = char_at(s, i) & 255
+    if (b & 192) != 128 {
+        return 0 - 1
+    }
+    return b & 63
 }
 
 fn utf8_next(s: str, i: i64) -> Utf8Next {
@@ -16,23 +30,40 @@ fn utf8_next(s: str, i: i64) -> Utf8Next {
         return Utf8Next { cp: b0, next: i + 1, ok: 1 }
     }
     if (b0 & 224) == 192 && i + 1 < n {
-        let b1 = char_at(s, i + 1) & 255
-        let cp = ((b0 & 31) * 64) + (b1 & 63)
+        let c1 = utf8_cont(s, i + 1)
+        if c1 < 0 {
+            return utf8_bad(i)
+        }
+        let cp = ((b0 & 31) * 64) + c1
+        if cp < 128 {
+            return utf8_bad(i)
+        }
         return Utf8Next { cp: cp, next: i + 2, ok: 1 }
     }
     if (b0 & 240) == 224 && i + 2 < n {
-        let b1 = char_at(s, i + 1) & 255
-        let b2 = char_at(s, i + 2) & 255
-        let cp = ((b0 & 15) * 4096) + ((b1 & 63) * 64) + (b2 & 63)
+        let c1 = utf8_cont(s, i + 1)
+        let c2 = utf8_cont(s, i + 2)
+        if c1 < 0 || c2 < 0 {
+            return utf8_bad(i)
+        }
+        let cp = ((b0 & 15) * 4096) + (c1 * 64) + c2
+        if cp < 2048 || (cp >= 55296 && cp <= 57343) {
+            return utf8_bad(i)
+        }
         return Utf8Next { cp: cp, next: i + 3, ok: 1 }
     }
     if (b0 & 248) == 240 && i + 3 < n {
-        let b1 = char_at(s, i + 1) & 255
-        let b2 = char_at(s, i + 2) & 255
-        let b3 = char_at(s, i + 3) & 255
-        let cp = ((b0 & 7) * 262144) + ((b1 & 63) * 4096) + ((b2 & 63) * 64) + (b3 & 63)
+        let c1 = utf8_cont(s, i + 1)
+        let c2 = utf8_cont(s, i + 2)
+        let c3 = utf8_cont(s, i + 3)
+        if c1 < 0 || c2 < 0 || c3 < 0 {
+            return utf8_bad(i)
+        }
+        let cp = ((b0 & 7) * 262144) + (c1 * 4096) + (c2 * 64) + c3
+        if cp < 65536 || cp > 1114111 {
+            return utf8_bad(i)
+        }
         return Utf8Next { cp: cp, next: i + 4, ok: 1 }
     }
-    // invalid → skip one byte
-    return Utf8Next { cp: 63, next: i + 1, ok: 1 }  // '?'
+    return utf8_bad(i)
 }

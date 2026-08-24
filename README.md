@@ -4,7 +4,7 @@
 
 | | |
 |--|--|
-| **sandak** | `pdfbaga` **0.1.0** |
+| **sandak** | `pdfbaga` **0.2.0** |
 | **Deps** | `std`, `bufbaga` |
 | **Font** | default `/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf` |
 
@@ -44,6 +44,8 @@ Or pass font path: `pdf_from_table_file(path, title, rows)`.
 - Embeds full TTF as `FontFile2` (CIDFontType2)
 
 Requires a Unicode TTF on the machine (DejaVu / Noto / Liberation).
+Missing font path is fail-loud (`file_exists`). Invalid UTF-8 becomes `?`.
+Empty tables return `pdf: no rows`.
 
 ## License
 
