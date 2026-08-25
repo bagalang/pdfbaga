@@ -11,6 +11,8 @@ struct TtfFont {
     id_range_off: Vec<i64>,
     glyph_ids: Vec<i64>,   // glyphIdArray
     range_base: Vec<i64>,  // byte offset into glyphIdArray region for each segment (index units)
+    advances: Vec<i64>,    // hmtx advanceWidth per glyph (font units)
+    units_per_em: i64,
     ok: i64,
     err: str
 }
@@ -41,6 +43,7 @@ fn ttf_fail(msg: str) -> TtfFont {
     let id_range_off: Vec<i64> = vec_new()
     let glyph_ids: Vec<i64> = vec_new()
     let range_base: Vec<i64> = vec_new()
+    let advances: Vec<i64> = vec_new()
     return TtfFont {
         data: bytes_new(0),
         start_code: start_code,
@@ -49,9 +52,58 @@ fn ttf_fail(msg: str) -> TtfFont {
         id_range_off: id_range_off,
         glyph_ids: glyph_ids,
         range_base: range_base,
+        advances: advances,
+        units_per_em: 0,
         ok: 0,
         err: msg
     }
+}
+
+fn ttf_units_per_em(data: bytes) -> i64 {
+    let off = ttf_find_table(data, "head")
+    if off < 0 || off + 20 > bytes_len(data) {
+        return 1000
+    }
+    let u = ttf_u16(data, off + 18)
+    if u < 1 {
+        return 1000
+    }
+    return u
+}
+
+fn ttf_load_advances(data: bytes) -> Vec<i64> {
+    let out: Vec<i64> = vec_new()
+    let maxp = ttf_find_table(data, "maxp")
+    let hhea = ttf_find_table(data, "hhea")
+    let hmtx = ttf_find_table(data, "hmtx")
+    if maxp < 0 || hhea < 0 || hmtx < 0 {
+        return out
+    }
+    if maxp + 6 > bytes_len(data) || hhea + 36 > bytes_len(data) {
+        return out
+    }
+    let ngl = ttf_u16(data, maxp + 4)
+    let nmet = ttf_u16(data, hhea + 34)
+    if ngl < 1 || nmet < 1 {
+        return out
+    }
+    let mut last: i64 = 500
+    let mut i: i64 = 0
+    while i < nmet {
+        let off = hmtx + i * 4
+        if off + 2 > bytes_len(data) {
+            i = nmet
+        } else {
+            last = ttf_u16(data, off)
+            vec_push(out, last)
+            i = i + 1
+        }
+    }
+    while i < ngl {
+        vec_push(out, last)
+        i = i + 1
+    }
+    return out
 }
 
 fn ttf_find_table(data: bytes, tag: str) -> i64 {
@@ -155,9 +207,30 @@ fn ttf_open_bytes(data: bytes) -> TtfFont {
         id_range_off: id_range_off,
         glyph_ids: glyph_ids,
         range_base: range_base,
+        advances: ttf_load_advances(data),
+        units_per_em: ttf_units_per_em(data),
         ok: 1,
         err: ""
     }
+}
+
+fn ttf_advance(font: TtfFont, gid: i64) -> i64 {
+    if gid < 0 || gid >= vec_len(font.advances) {
+        return 500
+    }
+    let w = vec_get(font.advances, gid)
+    if w < 1 {
+        return 500
+    }
+    return w
+}
+
+fn ttf_advance_pdf(font: TtfFont, gid: i64) -> i64 {
+    let upem = font.units_per_em
+    if upem < 1 {
+        return 600
+    }
+    return ttf_advance(font, gid) * 1000 / upem
 }
 
 fn ttf_glyph(font: TtfFont, cp: i64) -> i64 {

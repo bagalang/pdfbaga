@@ -22,7 +22,7 @@ fn pdf_ok(data: bytes) -> PdfResult {
 }
 
 fn pdf_version() -> str {
-    return "0.2.0"
+    return "0.2.2"
 }
 
 fn pdf_hex_digit(v: i64) -> i64 {
@@ -78,11 +78,404 @@ fn pdf_pad10(off: i64) -> str {
     return buf_str(b)
 }
 
+fn pdf_ulen(s: str) -> i64 {
+    let mut n: i64 = 0
+    let mut i: i64 = 0
+    while i < len(s) {
+        let u = utf8_next(s, i)
+        if u.ok == 0 {
+            break
+        }
+        n = n + 1
+        i = u.next
+    }
+    return n
+}
+
+fn pdf_uclip(s: str, maxn: i64) -> str {
+    if maxn < 2 {
+        return s
+    }
+    if pdf_ulen(s) <= maxn {
+        return s
+    }
+    let keep = maxn - 1
+    let mut i: i64 = 0
+    let mut n: i64 = 0
+    while i < len(s) && n < keep {
+        let u = utf8_next(s, i)
+        if u.ok == 0 {
+            break
+        }
+        n = n + 1
+        i = u.next
+    }
+    return concat(substr(s, 0, i), "..")
+}
+
+fn pdf_char_w(font: TtfFont, cp: i64, fs: i64) -> i64 {
+    let g = ttf_glyph(font, cp)
+    let adv = ttf_advance_pdf(font, g)
+    let w = adv * fs / 1000
+    if w < 1 {
+        return 1
+    }
+    return w
+}
+
+fn pdf_str_w(font: TtfFont, s: str, fs: i64) -> i64 {
+    let mut w: i64 = 0
+    let mut i: i64 = 0
+    while i < len(s) {
+        let u = utf8_next(s, i)
+        if u.ok == 0 {
+            break
+        }
+        w = w + pdf_char_w(font, u.cp, fs)
+        i = u.next
+    }
+    return w
+}
+
+fn pdf_fit_len(font: TtfFont, s: str, fs: i64, maxw: i64) -> i64 {
+    let mut w: i64 = 0
+    let mut i: i64 = 0
+    let mut last: i64 = 0
+    while i < len(s) {
+        let u = utf8_next(s, i)
+        if u.ok == 0 {
+            break
+        }
+        let cw = pdf_char_w(font, u.cp, fs)
+        if last > 0 && w + cw > maxw {
+            return last
+        }
+        w = w + cw
+        last = u.next
+        i = u.next
+    }
+    return last
+}
+
+fn pdf_wrap_to_width(font: TtfFont, s: str, fs: i64, maxw: i64) -> Vec<str> {
+    let out: Vec<str> = vec_new()
+    let mut limit = maxw
+    if limit < 12 {
+        limit = 12
+    }
+    if s == "" {
+        vec_push(out, "")
+        return out
+    }
+    let words = str_split(s, " ")
+    let mut cur = ""
+    let mut i: i64 = 0
+    while i < vec_len(words) {
+        let w = vec_get(words, i)
+        if w == "" {
+            i = i + 1
+        } else {
+            if cur == "" {
+                if pdf_str_w(font, w, fs) <= limit {
+                    cur = w
+                    i = i + 1
+                } else {
+                    let mut rest = w
+                    while pdf_str_w(font, rest, fs) > limit && len(rest) > 1 {
+                        let mut n = pdf_fit_len(font, rest, fs, limit)
+                        if n < 1 {
+                            n = 1
+                        }
+                        vec_push(out, substr(rest, 0, n))
+                        rest = substr(rest, n, len(rest))
+                    }
+                    cur = rest
+                    i = i + 1
+                }
+            } else {
+                let trial = concat(cur, concat(" ", w))
+                if pdf_str_w(font, trial, fs) <= limit {
+                    cur = trial
+                    i = i + 1
+                } else {
+                    vec_push(out, cur)
+                    cur = ""
+                }
+            }
+        }
+    }
+    if cur != "" {
+        vec_push(out, cur)
+    }
+    if vec_len(out) < 1 {
+        vec_push(out, s)
+    }
+    return out
+}
+
+fn pdf_w_array(font: TtfFont) -> str {
+    let n = vec_len(font.advances)
+    if n < 1 {
+        return ""
+    }
+    let mut b = buf_from(" /W [ 0 [")
+    let mut i: i64 = 0
+    while i < n {
+        b = buf_push(b, " ")
+        b = buf_push_i64(b, ttf_advance_pdf(font, i))
+        i = i + 1
+    }
+    b = buf_push(b, " ] ]")
+    return buf_str(b)
+}
+
+fn pdf_rect(cbuf: StrBuf, x: i64, y: i64, w: i64, h: i64, fill: i64) -> StrBuf {
+    let mut b = cbuf
+    if fill == 1 {
+        b = buf_push(b, "0.92 g ")
+        b = buf_push_i64(b, x)
+        b = buf_push(b, " ")
+        b = buf_push_i64(b, y)
+        b = buf_push(b, " ")
+        b = buf_push_i64(b, w)
+        b = buf_push(b, " ")
+        b = buf_push_i64(b, h)
+        b = buf_push(b, " re f 0 g\n")
+    }
+    b = buf_push(b, "0.4 w ")
+    b = buf_push_i64(b, x)
+    b = buf_push(b, " ")
+    b = buf_push_i64(b, y)
+    b = buf_push(b, " ")
+    b = buf_push_i64(b, w)
+    b = buf_push(b, " ")
+    b = buf_push_i64(b, h)
+    b = buf_push(b, " re S\n")
+    return b
+}
+
+fn pdf_looks_num(s: str) -> i64 {
+    let t = str_trim(s)
+    if t == "" {
+        return 0
+    }
+    let mut i: i64 = 0
+    let mut digits: i64 = 0
+    if char_at(t, 0) == 45 {
+        i = 1
+    }
+    while i < len(t) {
+        let c = char_at(t, i)
+        if c >= 48 && c <= 57 {
+            digits = digits + 1
+        } else {
+            if c != 46 && c != 44 && c != 32 {
+                return 0
+            }
+        }
+        i = i + 1
+    }
+    if digits > 0 {
+        return 1
+    }
+    return 0
+}
+
+fn pdf_col_weights(rows: Vec<str>, ncols: i64) -> Vec<i64> {
+    let w: Vec<i64> = vec_new()
+    let mut c: i64 = 0
+    while c < ncols {
+        vec_push(w, 2)
+        c = c + 1
+    }
+    let mut r: i64 = 0
+    while r < vec_len(rows) {
+        let cells = str_split(vec_get(rows, r), "\t")
+        c = 0
+        while c < ncols {
+            let mut cell = ""
+            if c < vec_len(cells) {
+                cell = vec_get(cells, c)
+            }
+            let n = pdf_ulen(cell)
+            if n > vec_get(w, c) {
+                vec_set(w, c, n)
+            }
+            c = c + 1
+        }
+        r = r + 1
+    }
+    c = 0
+    while c < ncols {
+        let n = vec_get(w, c)
+        if n > 40 {
+            vec_set(w, c, 40)
+        }
+        c = c + 1
+    }
+    return w
+}
+
+fn pdf_table_widths(font: TtfFont, rows: Vec<str>, ncols: i64, usable: i64, fs: i64) -> Vec<i64> {
+    let out: Vec<i64> = vec_new()
+    if ncols == 2 {
+        let half = usable / 2
+        vec_push(out, half)
+        vec_push(out, usable - half)
+        return out
+    }
+    let mut mins: Vec<i64> = vec_new()
+    let mut c: i64 = 0
+    while c < ncols {
+        vec_push(mins, 18)
+        c = c + 1
+    }
+    let mut r: i64 = 0
+    while r < vec_len(rows) {
+        let cells = str_split(vec_get(rows, r), "\t")
+        c = 0
+        while c < ncols {
+            let mut cell = ""
+            if c < vec_len(cells) {
+                cell = vec_get(cells, c)
+            }
+            let mut need: i64 = 18
+            if r == 0 || pdf_looks_num(cell) == 1 {
+                need = pdf_str_w(font, cell, fs) + 12
+            } else {
+                need = 40
+            }
+            if need > vec_get(mins, c) {
+                vec_set(mins, c, need)
+            }
+            c = c + 1
+        }
+        r = r + 1
+    }
+    let mut sum: i64 = 0
+    c = 0
+    while c < ncols {
+        sum = sum + vec_get(mins, c)
+        c = c + 1
+    }
+    let mut grow: i64 = 0
+    if ncols >= 6 {
+        grow = 1
+    }
+    if sum > usable && sum > 0 {
+        c = 0
+        while c < ncols {
+            vec_set(mins, c, vec_get(mins, c) * usable / sum)
+            if vec_get(mins, c) < 16 {
+                vec_set(mins, c, 16)
+            }
+            c = c + 1
+        }
+        sum = 0
+        c = 0
+        while c < ncols {
+            sum = sum + vec_get(mins, c)
+            c = c + 1
+        }
+    }
+    if sum < usable {
+        vec_set(mins, grow, vec_get(mins, grow) + (usable - sum))
+    } else {
+        if sum > usable {
+            let mut g = vec_get(mins, grow) - (sum - usable)
+            if g < 16 {
+                g = 16
+            }
+            vec_set(mins, grow, g)
+        }
+    }
+    return mins
+}
+
+fn pdf_spread_cols(weights: Vec<i64>, usable: i64) -> Vec<i64> {
+    let n = vec_len(weights)
+    let mut minw: i64 = 20
+    if n > 8 {
+        minw = 16
+    }
+    let mut sumw: i64 = 0
+    let mut i: i64 = 0
+    while i < n {
+        sumw = sumw + vec_get(weights, i)
+        i = i + 1
+    }
+    if sumw < 1 {
+        sumw = n
+    }
+    let out: Vec<i64> = vec_new()
+    let mut used: i64 = 0
+    i = 0
+    while i < n {
+        let mut w = usable * vec_get(weights, i) / sumw
+        if w < minw {
+            w = minw
+        }
+        vec_push(out, w)
+        used = used + w
+        i = i + 1
+    }
+    if used > usable && used > 0 {
+        i = 0
+        while i < n {
+            vec_set(out, i, vec_get(out, i) * usable / used)
+            i = i + 1
+        }
+    } else {
+        let extra = usable - used
+        if extra > 0 {
+            let mut grow = 0
+            if n > 1 {
+                grow = 1
+            }
+            vec_set(out, grow, vec_get(out, grow) + extra)
+        }
+    }
+    return out
+}
+
+fn pdf_meta_wrap(meta: str, maxc: i64) -> Vec<str> {
+    let out: Vec<str> = vec_new()
+    if meta == "" {
+        return out
+    }
+    let parts = str_split(meta, " · ")
+    let mut cur = ""
+    let mut i: i64 = 0
+    while i < vec_len(parts) {
+        let p = str_trim(vec_get(parts, i))
+        if cur == "" {
+            cur = p
+        } else {
+            let trial = concat(cur, concat(" · ", p))
+            if pdf_ulen(trial) > maxc {
+                vec_push(out, cur)
+                cur = p
+            } else {
+                cur = trial
+            }
+        }
+        i = i + 1
+    }
+    if cur != "" {
+        vec_push(out, cur)
+    }
+    return out
+}
+
 fn pdf_from_table(font: TtfFont, title: str, rows: Vec<str>) -> PdfResult {
-    return pdf_from_table_fs(font, title, rows, 9)
+    return pdf_from_table_full(font, title, "", rows, 0)
 }
 
 fn pdf_from_table_fs(font: TtfFont, title: str, rows: Vec<str>, font_size: i64) -> PdfResult {
+    return pdf_from_table_full(font, title, "", rows, font_size)
+}
+
+fn pdf_from_table_full(font: TtfFont, title: str, meta: str, rows: Vec<str>, font_size: i64) -> PdfResult {
     if font.ok == 0 {
         return pdf_fail(font.err)
     }
@@ -93,20 +486,39 @@ fn pdf_from_table_fs(font: TtfFont, title: str, rows: Vec<str>, font_size: i64) 
     let page_w: i64 = 595
     let page_h: i64 = 842
     let margin: i64 = 36
-    let mut fs = font_size
-    if fs < 7 { fs = 7 }
-    if fs > 12 { fs = 12 }
-    let line_h = fs + 5
-    let usable_w = page_w - 2 * margin
     let header = vec_get(rows, 0)
     let hcells: Vec<str> = str_split(header, "\t")
     let ncols = vec_len(hcells)
     if ncols < 1 {
         return pdf_fail("pdf: empty header")
     }
-    let col_w = usable_w / ncols
+    let mut fs = font_size
+    if fs == 0 {
+        fs = 9
+        if ncols >= 6 {
+            fs = 8
+        }
+        if ncols >= 8 {
+            fs = 7
+        }
+    }
+    if fs < 7 { fs = 7 }
+    if fs > 12 { fs = 12 }
+    let line_h = fs + 5
+    let usable_w = page_w - 2 * margin
+    let widths = pdf_spread_cols(pdf_col_weights(rows, ncols), usable_w)
+    let xs: Vec<i64> = vec_new()
+    let mut acc = margin
+    let mut ci: i64 = 0
+    while ci < ncols {
+        vec_push(xs, acc)
+        acc = acc + vec_get(widths, ci)
+        ci = ci + 1
+    }
     let top0 = page_h - margin
-    let body_rows_fit = (top0 - margin - 2 * line_h) / line_h
+    let mlines = pdf_meta_wrap(meta, 92)
+    let head_lines = 1 + vec_len(mlines)
+    let body_rows_fit = (top0 - margin - (head_lines + 2) * line_h) / line_h
     if body_rows_fit < 2 {
         return pdf_fail("pdf: layout")
     }
@@ -117,71 +529,159 @@ fn pdf_from_table_fs(font: TtfFont, title: str, rows: Vec<str>, font_size: i64) 
     while r < nrows {
         let mut cbuf = buf_new()
         let mut y = top0
+        let ttl = pdf_uclip(title, 80)
         cbuf = buf_push(cbuf, "BT /F1 ")
-        cbuf = buf_push(cbuf, int_to_str(fs + 2))
+        cbuf = buf_push(cbuf, int_to_str(fs + 3))
         cbuf = buf_push(cbuf, " Tf 1 0 0 1 ")
         cbuf = buf_push(cbuf, int_to_str(margin))
         cbuf = buf_push(cbuf, " ")
         cbuf = buf_push(cbuf, int_to_str(y))
         cbuf = buf_push(cbuf, " Tm ")
-        cbuf = buf_push(cbuf, pdf_text_hex(font, title))
+        cbuf = buf_push(cbuf, pdf_text_hex(font, ttl))
         cbuf = buf_push(cbuf, " Tj ET\n")
-        y = y - (line_h + 8)
+        y = y - (line_h + 2)
+        let mut mi: i64 = 0
+        while mi < vec_len(mlines) {
+            cbuf = buf_push(cbuf, "BT /F1 ")
+            cbuf = buf_push(cbuf, int_to_str(fs))
+            cbuf = buf_push(cbuf, " Tf 1 0 0 1 ")
+            cbuf = buf_push(cbuf, int_to_str(margin))
+            cbuf = buf_push(cbuf, " ")
+            cbuf = buf_push(cbuf, int_to_str(y))
+            cbuf = buf_push(cbuf, " Tm ")
+            cbuf = buf_push(cbuf, pdf_text_hex(font, vec_get(mlines, mi)))
+            cbuf = buf_push(cbuf, " Tj ET\n")
+            y = y - line_h
+            mi = mi + 1
+        }
+        y = y - 4
 
         let mut used: i64 = 0
         while r < nrows && used < body_rows_fit {
             let line = vec_get(rows, r)
             let cells: Vec<str> = str_split(line, "\t")
-            cbuf = buf_push(cbuf, "0.6 w ")
-            cbuf = buf_push(cbuf, int_to_str(margin))
-            cbuf = buf_push(cbuf, " ")
-            cbuf = buf_push(cbuf, int_to_str(y + fs + 1))
-            cbuf = buf_push(cbuf, " m ")
-            cbuf = buf_push(cbuf, int_to_str(margin + usable_w))
-            cbuf = buf_push(cbuf, " ")
-            cbuf = buf_push(cbuf, int_to_str(y + fs + 1))
-            cbuf = buf_push(cbuf, " l S\n")
+            let row_bot = y - line_h
+            let mut fill: i64 = 0
+            if r == 0 {
+                fill = 1
+            }
             let mut c: i64 = 0
+            while c < ncols {
+                cbuf = pdf_rect(cbuf, vec_get(xs, c), row_bot, vec_get(widths, c), line_h, fill)
+                c = c + 1
+            }
+            c = 0
             while c < ncols {
                 let mut cell = ""
                 if c < vec_len(cells) {
                     cell = vec_get(cells, c)
                 }
-                let mut show = cell
-                // rough char limit for narrow cols
-                if len(show) > 48 {
-                    let mut tb = buf_from(substr(show, 0, 45))
-                    tb = buf_push(tb, "...")
-                    show = buf_str(tb)
+                let cw = vec_get(widths, c)
+                let mut inner = cw - 6
+                if inner < 8 {
+                    inner = 8
                 }
-                let x = margin + c * col_w + 2
-                cbuf = buf_push(cbuf, "BT /F1 ")
-                cbuf = buf_push(cbuf, int_to_str(fs))
-                cbuf = buf_push(cbuf, " Tf 1 0 0 1 ")
-                cbuf = buf_push(cbuf, int_to_str(x))
-                cbuf = buf_push(cbuf, " ")
-                cbuf = buf_push(cbuf, int_to_str(y))
-                cbuf = buf_push(cbuf, " Tm ")
-                cbuf = buf_push(cbuf, pdf_text_hex(font, show))
-                cbuf = buf_push(cbuf, " Tj ET\n")
+                let mut show = cell
+                if pdf_str_w(font, show, fs) > inner {
+                    let n = pdf_fit_len(font, show, fs, inner)
+                    if n > 1 {
+                        show = concat(substr(show, 0, n), "..")
+                    }
+                }
+                let mut x = vec_get(xs, c) + 3
+                if r > 0 && pdf_looks_num(cell) == 1 {
+                    let tw = pdf_str_w(font, show, fs)
+                    let rx = vec_get(xs, c) + cw - 3 - tw
+                    if rx > x {
+                        x = rx
+                    }
+                }
+                cbuf = pdf_draw_line(cbuf, font, fs, x, y - fs - 2, show)
                 c = c + 1
             }
-            y = y - line_h
+            y = row_bot
             r = r + 1
             used = used + 1
         }
-        cbuf = buf_push(cbuf, "0.6 w ")
-        cbuf = buf_push(cbuf, int_to_str(margin))
-        cbuf = buf_push(cbuf, " ")
-        cbuf = buf_push(cbuf, int_to_str(y + fs + 1))
-        cbuf = buf_push(cbuf, " m ")
-        cbuf = buf_push(cbuf, int_to_str(margin + usable_w))
-        cbuf = buf_push(cbuf, " ")
-        cbuf = buf_push(cbuf, int_to_str(y + fs + 1))
-        cbuf = buf_push(cbuf, " l S\n")
         vec_push(page_streams, buf_str(cbuf))
     }
 
+    return pdf_pack_pages_uni(font, page_streams, rows)
+}
+
+fn pdf_hex4(v: i64) -> str {
+    let x = v & 65535
+    return concat(pdf_hex_byte((x / 256) & 255), pdf_hex_byte(x & 255))
+}
+
+fn pdf_cps_has(cps: Vec<i64>, cp: i64) -> i64 {
+    let mut i: i64 = 0
+    while i < vec_len(cps) {
+        if vec_get(cps, i) == cp {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+fn pdf_touni_cmap_str(font: TtfFont, srcs: Vec<str>) -> str {
+    let cps: Vec<i64> = vec_new()
+    let mut si: i64 = 0
+    while si < vec_len(srcs) {
+        let s = vec_get(srcs, si)
+        let mut i: i64 = 0
+        while i < len(s) {
+            let u = utf8_next(s, i)
+            if u.ok == 0 {
+                break
+            }
+            if u.cp > 0 {
+                if pdf_cps_has(cps, u.cp) == 0 {
+                    vec_push(cps, u.cp)
+                }
+            }
+            i = u.next
+        }
+        si = si + 1
+    }
+    let mut b = buf_from("/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n")
+    let n = vec_len(cps)
+    let mut off: i64 = 0
+    while off < n {
+        let mut chunk = n - off
+        if chunk > 100 {
+            chunk = 100
+        }
+        b = buf_push_i64(b, chunk)
+        b = buf_push(b, " beginbfchar\n")
+        let mut j: i64 = 0
+        while j < chunk {
+            let cp = vec_get(cps, off + j)
+            let g = ttf_glyph(font, cp)
+            b = buf_push(b, "<")
+            b = buf_push(b, pdf_hex4(g))
+            b = buf_push(b, "> <")
+            b = buf_push(b, pdf_hex4(cp))
+            b = buf_push(b, ">\n")
+            j = j + 1
+        }
+        b = buf_push(b, "endbfchar\n")
+        off = off + chunk
+    }
+    b = buf_push(b, "endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n")
+    return buf_str(b)
+}
+
+fn pdf_pack_pages(font: TtfFont, page_streams: Vec<str>) -> PdfResult {
+    let empty: Vec<str> = vec_new()
+    return pdf_pack_pages_uni(font, page_streams, empty)
+}
+
+fn pdf_pack_pages_uni(font: TtfFont, page_streams: Vec<str>, uni_src: Vec<str>) -> PdfResult {
+    if vec_len(page_streams) < 1 {
+        return pdf_fail("pdf: empty")
+    }
     let np = vec_len(page_streams)
     let o_page0 = 3
     let o_cont0 = 3 + np
@@ -260,7 +760,13 @@ fn pdf_from_table_fs(font: TtfFont, title: str, rows: Vec<str>, font_size: i64) 
     pdfb = bytes_concat(pdfb, bytes_of_str(concat(concat(concat(int_to_str(o_font0), " 0 obj\n<< /Type /Font /Subtype /Type0 /BaseFont /ReportFont /Encoding /Identity-H /DescendantFonts ["), int_to_str(o_cid)), concat(" 0 R] /ToUnicode ", concat(int_to_str(o_touni), " 0 R >>\nendobj\n")))))
 
     vec_push(offs, bytes_len(pdfb))
-    pdfb = bytes_concat(pdfb, bytes_of_str(concat(concat(int_to_str(o_cid), " 0 obj\n<< /Type /Font /Subtype /CIDFontType2 /BaseFont /ReportFont /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor "), concat(int_to_str(o_desc), " 0 R /CIDToGIDMap /Identity /DW 600 >>\nendobj\n"))))
+    let mut cid = buf_from(int_to_str(o_cid))
+    cid = buf_push(cid, " 0 obj\n<< /Type /Font /Subtype /CIDFontType2 /BaseFont /ReportFont /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor ")
+    cid = buf_push_i64(cid, o_desc)
+    cid = buf_push(cid, " 0 R /CIDToGIDMap /Identity /DW 500")
+    cid = buf_push(cid, pdf_w_array(font))
+    cid = buf_push(cid, " >>\nendobj\n")
+    pdfb = bytes_concat(pdfb, bytes_of_str(buf_str(cid)))
 
     vec_push(offs, bytes_len(pdfb))
     pdfb = bytes_concat(pdfb, bytes_of_str(concat(concat(int_to_str(o_desc), " 0 obj\n<< /Type /FontDescriptor /FontName /ReportFont /Flags 32 /FontBBox [-100 -200 1000 900] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 "), concat(int_to_str(o_ffile), " 0 R >>\nendobj\n"))))
@@ -271,7 +777,10 @@ fn pdf_from_table_fs(font: TtfFont, title: str, rows: Vec<str>, font_size: i64) 
     pdfb = bytes_concat(pdfb, font.data)
     pdfb = bytes_concat(pdfb, bytes_of_str("\nendstream\nendobj\n"))
 
-    let touni = "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n"
+    let mut touni = pdf_touni_cmap_str(font, uni_src)
+    if touni == "" {
+        touni = "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n"
+    }
     vec_push(offs, bytes_len(pdfb))
     pdfb = bytes_concat(pdfb, bytes_of_str(concat(concat(concat(int_to_str(o_touni), " 0 obj\n<< /Length "), int_to_str(len(touni))), concat(" >>\nstream\n", concat(touni, "\nendstream\nendobj\n")))))
 
@@ -300,23 +809,257 @@ fn pdf_default_font_path() -> str {
     return "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 }
 
-fn pdf_from_table_file(font_path: str, title: str, rows: Vec<str>) -> PdfResult !IO {
+fn pdf_load_font(font_path: str) -> TtfFont !IO {
     if font_path == "" || file_exists(font_path)? == 0 {
         let mut em = buf_from("pdf: cannot read font ")
         em = buf_push(em, font_path)
-        return pdf_fail(buf_str(em))
+        return ttf_fail(buf_str(em))
     }
     let fb = read_file_bytes(font_path)?
     if bytes_len(fb) < 100 {
         let mut em = buf_from("pdf: cannot read font ")
         em = buf_push(em, font_path)
-        return pdf_fail(buf_str(em))
+        return ttf_fail(buf_str(em))
     }
-    let font = ttf_open_bytes(fb)
+    return ttf_open_bytes(fb)
+}
+
+fn pdf_from_table_file(font_path: str, title: str, rows: Vec<str>) -> PdfResult !IO {
+    return pdf_from_table_file_meta(font_path, title, "", rows)?
+}
+
+fn pdf_from_table_file_meta(font_path: str, title: str, meta: str, rows: Vec<str>) -> PdfResult !IO {
+    let font = pdf_load_font(font_path)?
     if font.ok == 0 {
         return pdf_fail(font.err)
     }
-    return pdf_from_table(font, title, rows)
+    return pdf_from_table_full(font, title, meta, rows, 0)
+}
+
+fn pdf_wrap_words(s: str, maxc: i64) -> Vec<str> {
+    let out: Vec<str> = vec_new()
+    if s == "" {
+        return out
+    }
+    let words = str_split(s, " ")
+    let mut cur = ""
+    let mut i: i64 = 0
+    while i < vec_len(words) {
+        let w = vec_get(words, i)
+        if cur == "" {
+            cur = w
+        } else {
+            let trial = concat(cur, concat(" ", w))
+            if pdf_ulen(trial) > maxc {
+                vec_push(out, cur)
+                cur = w
+            } else {
+                cur = trial
+            }
+        }
+        i = i + 1
+    }
+    if cur != "" {
+        vec_push(out, cur)
+    }
+    return out
+}
+
+fn pdf_draw_line(cbuf: StrBuf, font: TtfFont, fs: i64, x: i64, y: i64, s: str) -> StrBuf {
+    let mut b = cbuf
+    b = buf_push(b, "BT /F1 ")
+    b = buf_push(b, int_to_str(fs))
+    b = buf_push(b, " Tf 1 0 0 1 ")
+    b = buf_push(b, int_to_str(x))
+    b = buf_push(b, " ")
+    b = buf_push(b, int_to_str(y))
+    b = buf_push(b, " Tm ")
+    b = buf_push(b, pdf_text_hex(font, s))
+    b = buf_push(b, " Tj ET\n")
+    return b
+}
+
+fn pdf_tsv_rows(tsv: str) -> Vec<str> {
+    let raw = str_split(tsv, "\n")
+    let rows: Vec<str> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(raw) {
+        let line = vec_get(raw, i)
+        if i == vec_len(raw) - 1 && line == "" {
+            i = i + 1
+        } else {
+            vec_push(rows, line)
+            i = i + 1
+        }
+    }
+    return rows
+}
+
+fn pdf_from_blocks(font: TtfFont, kinds: Vec<i64>, texts: Vec<str>) -> PdfResult {
+    if font.ok == 0 {
+        return pdf_fail(font.err)
+    }
+    if vec_len(kinds) < 1 {
+        return pdf_fail("pdf: no blocks")
+    }
+    let page_w: i64 = 595
+    let page_h: i64 = 842
+    let margin: i64 = 40
+    let fs: i64 = 9
+    let line_h = fs + 5
+    let usable_w = page_w - 2 * margin
+    let page_streams: Vec<str> = vec_new()
+    let mut cbuf = buf_new()
+    let mut y = page_h - margin
+    let n = vec_len(kinds)
+    let mut bi: i64 = 0
+    while bi < n {
+        let kind = vec_get(kinds, bi)
+        let text = vec_get(texts, bi)
+        if kind == 1 {
+            if y < margin + line_h * 3 {
+                vec_push(page_streams, buf_str(cbuf))
+                cbuf = buf_new()
+                y = page_h - margin
+            }
+            cbuf = pdf_draw_line(cbuf, font, fs + 5, margin, y, pdf_uclip(text, 70))
+            y = y - (line_h + 8)
+        }
+        if kind == 2 {
+            let lines = pdf_wrap_to_width(font, text, fs, usable_w)
+            let need = vec_len(lines) * line_h
+            if y - need < margin {
+                vec_push(page_streams, buf_str(cbuf))
+                cbuf = buf_new()
+                y = page_h - margin
+            }
+            let mut li: i64 = 0
+            while li < vec_len(lines) {
+                cbuf = pdf_draw_line(cbuf, font, fs, margin, y, vec_get(lines, li))
+                y = y - line_h
+                li = li + 1
+            }
+            y = y - 2
+        }
+        if kind == 3 {
+            let rows = pdf_tsv_rows(text)
+            if vec_len(rows) > 0 {
+                let header = vec_get(rows, 0)
+                let hcells = str_split(header, "\t")
+                let ncols = vec_len(hcells)
+                if ncols > 0 {
+                    let mut tfs = fs
+                    if ncols >= 6 {
+                        tfs = 8
+                    }
+                    let tline = tfs + 4
+                    if y < margin + tline * 4 {
+                        vec_push(page_streams, buf_str(cbuf))
+                        cbuf = buf_new()
+                        y = page_h - margin
+                    }
+                    let widths = pdf_table_widths(font, rows, ncols, usable_w, tfs)
+                    let xs: Vec<i64> = vec_new()
+                    let mut acc = margin
+                    let mut ci: i64 = 0
+                    while ci < ncols {
+                        vec_push(xs, acc)
+                        acc = acc + vec_get(widths, ci)
+                        ci = ci + 1
+                    }
+                    let mut r: i64 = 0
+                    let nrows = vec_len(rows)
+                    while r < nrows {
+                        let line = vec_get(rows, r)
+                        let cells = str_split(line, "\t")
+                        let mut max_lines: i64 = 1
+                        let mut c: i64 = 0
+                        while c < ncols {
+                            let mut cell = ""
+                            if c < vec_len(cells) {
+                                cell = vec_get(cells, c)
+                            }
+                            let mut inner = vec_get(widths, c) - 8
+                            if inner < 12 {
+                                inner = 12
+                            }
+                            let ls = pdf_wrap_to_width(font, cell, tfs, inner)
+                            if vec_len(ls) > max_lines {
+                                max_lines = vec_len(ls)
+                            }
+                            c = c + 1
+                        }
+                        if max_lines > 6 {
+                            max_lines = 6
+                        }
+                        let needed_h = max_lines * tline + 4
+                        if y - needed_h < margin {
+                            vec_push(page_streams, buf_str(cbuf))
+                            cbuf = buf_new()
+                            y = page_h - margin
+                        }
+                        let row_top = y
+                        let row_bot = y - needed_h
+                        let mut fill: i64 = 0
+                        if r == 0 {
+                            fill = 1
+                        }
+                        c = 0
+                        while c < ncols {
+                            let cw = vec_get(widths, c)
+                            cbuf = pdf_rect(cbuf, vec_get(xs, c), row_bot, cw, needed_h, fill)
+                            c = c + 1
+                        }
+                        c = 0
+                        while c < ncols {
+                            let mut cell = ""
+                            if c < vec_len(cells) {
+                                cell = vec_get(cells, c)
+                            }
+                            let cw = vec_get(widths, c)
+                            let mut inner = cw - 8
+                            if inner < 12 {
+                                inner = 12
+                            }
+                            let ls = pdf_wrap_to_width(font, cell, tfs, inner)
+                            let mut li: i64 = 0
+                            while li < vec_len(ls) && li < max_lines {
+                                let show = vec_get(ls, li)
+                                let mut x = vec_get(xs, c) + 4
+                                if r > 0 && pdf_looks_num(cell) == 1 && vec_len(ls) == 1 {
+                                    let tw = pdf_str_w(font, show, tfs)
+                                    let rx = vec_get(xs, c) + cw - 4 - tw
+                                    if rx > x {
+                                        x = rx
+                                    }
+                                }
+                                let ty = row_top - tfs - 2 - li * tline
+                                cbuf = pdf_draw_line(cbuf, font, tfs, x, ty, show)
+                                li = li + 1
+                            }
+                            c = c + 1
+                        }
+                        y = row_bot
+                        r = r + 1
+                    }
+                    y = y - 10
+                }
+            }
+        }
+        bi = bi + 1
+    }
+    if buf_len(cbuf) > 0 {
+        vec_push(page_streams, buf_str(cbuf))
+    }
+    return pdf_pack_pages_uni(font, page_streams, texts)
+}
+
+fn pdf_from_blocks_file(font_path: str, kinds: Vec<i64>, texts: Vec<str>) -> PdfResult !IO {
+    let font = pdf_load_font(font_path)?
+    if font.ok == 0 {
+        return pdf_fail(font.err)
+    }
+    return pdf_from_blocks(font, kinds, texts)
 }
 
 fn pdf_from_table_default(title: str, rows: Vec<str>) -> PdfResult !IO {

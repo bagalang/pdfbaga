@@ -4,7 +4,7 @@
 
 | | |
 |--|--|
-| **sandak** | `pdfbaga` **0.2.0** |
+| **sandak** | `pdfbaga` **0.2.2** |
 | **Deps** | `std`, `bufbaga` |
 | **Font** | default `/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf` |
 
